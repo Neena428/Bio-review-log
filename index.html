@@ -55,7 +55,7 @@
     const SHEET_NAME = "BioJournal";               // exact tab name
 
     // Build the Google Visualization API JSON endpoint (no API key needed when sheet is public/viewable by link)
-    const GVIZ_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?sheet=${encodeURIComponent(SHEET_NAME)}&tqx=out:json`;
+    const GVIZ_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(SHEET_NAME)}`;
 
     const elCards = document.getElementById('cards');
     const elSearch = document.getElementById('search');
@@ -69,45 +69,46 @@
 
     // Parse Google Visualization JSON (which is returned as JS function call text)
     async function fetchSheet() {
-      const res = await fetch(GVIZ_URL);
-      const text = await res.text();
-      const json = JSON.parse(text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1));
-      const cols = json.table.cols.map(c => (c.label || '').trim());
-      const rows = json.table.rows || [];
-
-      const idx = (name) => cols.findIndex(c => c.toLowerCase() === name.toLowerCase());
-      const ci = {
-        date: idx('date'), title: idx('title'), source: idx('source'), paper: idx('paperurl'),
-        l1: idx('learn1'), l2: idx('learn2'), l3: idx('learn3'), excited: idx('excited'),
-        confused: idx('confused'), tags: idx('tags'), notes: idx('notesurl')
+    const res = await fetch(GVIZ_URL);
+    const text = await res.text();
+  
+    // Parse CSV lines
+    const rows = text.split(/\r?\n/).map(r => r.split(/,(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)/).map(s => s.replace(/^\"|\"$/g, '').trim())).filter(r => r.length > 1);
+    const headers = rows.shift().map(h => h.toLowerCase());
+  
+    const getIndex = (name) => headers.findIndex(h => h === name.toLowerCase());
+    const ci = {
+      date: getIndex('date'), title: getIndex('title'), source: getIndex('source'),
+      paper: getIndex('paperurl'), l1: getIndex('learn1'), l2: getIndex('learn2'),
+      l3: getIndex('learn3'), excited: getIndex('excited'), confused: getIndex('confused'),
+      tags: getIndex('tags'), notes: getIndex('notesurl')
+    };
+  
+    entries = rows.map(r => {
+      const get = (i) => (i >= 0 && r[i]) ? r[i] : '';
+      const dateStr = get(ci.date);
+      const d = dateStr ? new Date(dateStr) : null;
+      const dateISO = d && !isNaN(d) ? d.toISOString().slice(0,10) : '';
+      const tags = get(ci.tags).split(',').map(t => t.trim()).filter(Boolean);
+      return {
+        dateRaw: dateStr,
+        dateISO,
+        title: get(ci.title),
+        source: get(ci.source),
+        paper: get(ci.paper),
+        l1: get(ci.l1), l2: get(ci.l2), l3: get(ci.l3),
+        excited: get(ci.excited),
+        confused: get(ci.confused),
+        tags,
+        notes: get(ci.notes)
       };
+    }).filter(e => e.title || e.l1 || e.l2 || e.l3);
+  
+    render();
+    buildTagBar();
+    buildStats();
+  }
 
-      entries = rows.map(r => {
-        const c = r.c || [];
-        const get = (i) => (i >= 0 && c[i] && c[i].v != null) ? String(c[i].v).trim() : '';
-        const dateStr = get(ci.date);
-        // try to normalize date
-        const d = dateStr ? new Date(dateStr) : null;
-        const dateISO = d && !isNaN(d) ? d.toISOString().slice(0,10) : '';
-        const tags = get(ci.tags).split(',').map(t => t.trim()).filter(Boolean);
-        return {
-          dateRaw: dateStr,
-          dateISO,
-          title: get(ci.title),
-          source: get(ci.source),
-          paper: get(ci.paper),
-          l1: get(ci.l1), l2: get(ci.l2), l3: get(ci.l3),
-          excited: get(ci.excited),
-          confused: get(ci.confused),
-          tags,
-          notes: get(ci.notes)
-        };
-      }).filter(e => e.title || e.l1 || e.l2 || e.l3);
-
-      render();
-      buildTagBar();
-      buildStats();
-    }
 
     function buildStats(){
       const total = entries.length;
