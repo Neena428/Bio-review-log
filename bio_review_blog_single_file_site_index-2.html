@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Biology Review Log — Danyal Sarfraz</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="description" content="Daily biology review notes: three things I learned, one thing that excited me, and one thing I didn't fully understand — updated automatically from Google Sheets." />
+  <style>
+    /* graceful fade-in */
+    .fade-in { animation: fade 0.4s ease-in-out forwards; opacity: 0; }
+    @keyframes fade { to { opacity: 1; } }
+    /* simple focus ring for accessibility */
+    :focus { outline: 2px solid #60a5fa; outline-offset: 2px; }
+  </style>
+</head>
+<body class="min-h-screen bg-gradient-to-b from-slate-50 to-white text-slate-800">
+  <header class="sticky top-0 z-20 bg-white/80 backdrop-blur border-b border-slate-200">
+    <div class="mx-auto max-w-5xl px-4 py-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight">Biology Review Log</h1>
+        <p class="text-slate-500 text-sm sm:text-base">Three things I learned · One thing that excited me · One thing I didn't fully understand</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <input id="search" type="search" placeholder="Search title, tags, notes…" class="w-64 max-w-full rounded-xl border border-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-200" />
+        <select id="sort" class="rounded-xl border border-slate-300 px-3 py-2 text-sm shadow-sm focus:ring-2 focus:ring-blue-200">
+          <option value="desc">Newest first</option>
+          <option value="asc">Oldest first</option>
+        </select>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-5xl px-4 py-6">
+    <section id="stats" class="mb-6 grid grid-cols-2 sm:grid-cols-4 gap-3"></section>
+
+    <div id="tagBar" class="flex flex-wrap gap-2 mb-6"></div>
+
+    <div id="cards" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"></div>
+
+    <div id="empty" class="hidden mt-12 text-center text-slate-500">No entries match your search.</div>
+
+    <footer class="mt-16 mb-8 text-center text-xs text-slate-400">
+      <p>Data auto-loaded from Google Sheets · Built as a single static HTML file.</p>
+    </footer>
+  </main>
+
+  <script>
+    // === CONFIGURE THESE TWO LINES ===
+    // 1) Create a Google Sheet with columns:
+    // Date, Title, Source, PaperURL, Learn1, Learn2, Learn3, Excited, Confused, Tags, NotesURL
+    // 2) Share the sheet: File → Share → General access → "Anyone with the link" (Viewer)
+    // 3) Put the Sheet ID and sheet (tab) name below.
+    const SHEET_ID = "1ZvWzQrPl1lAEF95-2PrTLzTvwNEiyZeDPzY6XIpKO3I"; // e.g., 1AbCxyz...
+    const SHEET_NAME = "BioJournal";               // exact tab name
+
+    // Build the Google Visualization API JSON endpoint (no API key needed when sheet is public/viewable by link)
+    const GVIZ_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?sheet=${encodeURIComponent(SHEET_NAME)}&tqx=out:json`;
+
+    const elCards = document.getElementById('cards');
+    const elSearch = document.getElementById('search');
+    const elSort = document.getElementById('sort');
+    const elEmpty = document.getElementById('empty');
+    const elTagBar = document.getElementById('tagBar');
+    const elStats = document.getElementById('stats');
+
+    let entries = [];      // all parsed rows
+    let activeTag = null;  // current tag filter
+
+    // Parse Google Visualization JSON (which is returned as JS function call text)
+    async function fetchSheet() {
+      const res = await fetch(GVIZ_URL);
+      const text = await res.text();
+      const json = JSON.parse(text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1));
+      const cols = json.table.cols.map(c => (c.label || '').trim());
+      const rows = json.table.rows || [];
+
+      const idx = (name) => cols.findIndex(c => c.toLowerCase() === name.toLowerCase());
+      const ci = {
+        date: idx('date'), title: idx('title'), source: idx('source'), paper: idx('paperurl'),
+        l1: idx('learn1'), l2: idx('learn2'), l3: idx('learn3'), excited: idx('excited'),
+        confused: idx('confused'), tags: idx('tags'), notes: idx('notesurl')
+      };
+
+      entries = rows.map(r => {
+        const c = r.c || [];
+        const get = (i) => (i >= 0 && c[i] && c[i].v != null) ? String(c[i].v).trim() : '';
+        const dateStr = get(ci.date);
+        // try to normalize date
+        const d = dateStr ? new Date(dateStr) : null;
+        const dateISO = d && !isNaN(d) ? d.toISOString().slice(0,10) : '';
+        const tags = get(ci.tags).split(',').map(t => t.trim()).filter(Boolean);
+        return {
+          dateRaw: dateStr,
+          dateISO,
+          title: get(ci.title),
+          source: get(ci.source),
+          paper: get(ci.paper),
+          l1: get(ci.l1), l2: get(ci.l2), l3: get(ci.l3),
+          excited: get(ci.excited),
+          confused: get(ci.confused),
+          tags,
+          notes: get(ci.notes)
+        };
+      }).filter(e => e.title || e.l1 || e.l2 || e.l3);
+
+      render();
+      buildTagBar();
+      buildStats();
+    }
+
+    function buildStats(){
+      const total = entries.length;
+      const uniqueTags = new Set(entries.flatMap(e => e.tags));
+      const newest = entries.map(e => e.dateISO).filter(Boolean).sort().slice(-1)[0] || '—';
+      const sources = new Set(entries.map(e => e.source).filter(Boolean));
+
+      elStats.innerHTML = '';
+      const card = (label, value) => `
+        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div class="text-xs uppercase tracking-wide text-slate-500">${label}</div>
+          <div class="text-2xl font-semibold mt-1">${value}</div>
+        </div>`;
+      elStats.insertAdjacentHTML('beforeend', card('Total entries', total));
+      elStats.insertAdjacentHTML('beforeend', card('Unique tags', uniqueTags.size));
+      elStats.insertAdjacentHTML('beforeend', card('Sources', sources.size));
+      elStats.insertAdjacentHTML('beforeend', card('Latest date', newest));
+    }
+
+    function buildTagBar(){
+      const allTags = Array.from(new Set(entries.flatMap(e => e.tags))).sort((a,b)=>a.localeCompare(b));
+      elTagBar.innerHTML = '';
+      if(allTags.length === 0) return;
+      const makeChip = (t) => {
+        const active = t === active;
+        return `<button data-tag="${t}" class="px-3 py-1.5 text-sm rounded-full border ${activeTag===t? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}">${t}</button>`;
+      };
+      elTagBar.insertAdjacentHTML('beforeend', `<span class="text-sm text-slate-500 self-center mr-1">Filter:</span>`);
+      elTagBar.insertAdjacentHTML('beforeend', `<button data-tag="__all__" class="px-3 py-1.5 text-sm rounded-full border ${!activeTag? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}">All</button>`);
+      allTags.forEach(t => elTagBar.insertAdjacentHTML('beforeend', makeChip(t)));
+
+      elTagBar.querySelectorAll('button').forEach(btn=>{
+        btn.addEventListener('click', ()=>{
+          const t = btn.getAttribute('data-tag');
+          activeTag = (t === '__all__') ? null : t;
+          buildTagBar();
+          render();
+        });
+      });
+    }
+
+    function render(){
+      const q = (elSearch.value || '').toLowerCase().trim();
+      const sorted = [...entries].sort((a,b)=>{
+        const da = a.dateISO || ''; const db = b.dateISO || '';
+        return elSort.value === 'asc' ? da.localeCompare(db) : db.localeCompare(da);
+      });
+
+      const filtered = sorted.filter(e => {
+        if (activeTag && !e.tags.includes(activeTag)) return false;
+        if (!q) return true;
+        const blob = [e.title, e.source, e.l1, e.l2, e.l3, e.excited, e.confused, e.tags.join(','), e.dateISO].join(' ').toLowerCase();
+        return blob.includes(q);
+      });
+
+      elCards.innerHTML = '';
+      elEmpty.classList.toggle('hidden', filtered.length !== 0);
+
+      for (const e of filtered){
+        const tagHtml = e.tags.map(t=>`<span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">${t}</span>`).join(' ');
+        const date = e.dateISO || e.dateRaw || '';
+        const paperLink = e.paper ? `<a href="${e.paper}" target="_blank" rel="noopener" class="text-blue-700 hover:underline">${e.title || 'Paper link'}</a>` : (e.title || '(untitled)');
+        const notesLink = e.notes ? `<a href="${e.notes}" target="_blank" rel="noopener" class="text-slate-500 hover:underline text-xs">Notes ↗</a>` : '';
+
+        const card = `
+          <article class="fade-in rounded-2xl border border-slate-200 bg-white p-4 shadow-sm flex flex-col gap-3">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <div class="text-xs text-slate-500">${date || '—'}</div>
+                <h2 class="font-semibold leading-snug">${paperLink}</h2>
+                ${e.source ? `<div class=\"text-xs text-slate-500\">${e.source}</div>` : ''}
+              </div>
+              <div class="flex gap-2 items-center">${notesLink}</div>
+            </div>
+
+            <div class="flex flex-wrap gap-2">${tagHtml}</div>
+
+            <details class="group">
+              <summary class="cursor-pointer select-none text-sm text-slate-700 flex items-center gap-2">
+                <span class="inline-block w-2 h-2 rounded-full bg-blue-500"></span>
+                <span class="font-medium">Open summary</span>
+                <span class="ml-auto text-xs text-slate-400 group-open:hidden">show</span>
+                <span class="ml-auto text-xs text-slate-400 hidden group-open:inline">hide</span>
+              </summary>
+              <div class="mt-3 space-y-3 text-sm text-slate-800">
+                <div>
+                  <div class="font-medium text-slate-600 mb-1">Three things I learned</div>
+                  <ul class="list-disc pl-5 space-y-1">
+                    ${e.l1 ? `<li>${escapeHtml(e.l1)}</li>`:''}
+                    ${e.l2 ? `<li>${escapeHtml(e.l2)}</li>`:''}
+                    ${e.l3 ? `<li>${escapeHtml(e.l3)}</li>`:''}
+                  </ul>
+                </div>
+                ${e.excited ? `<div><div class="font-medium text-slate-600 mb-1">One thing that excited me</div><p>${escapeHtml(e.excited)}</p></div>`:''}
+                ${e.confused ? `<div><div class="font-medium text-slate-600 mb-1">One thing I didn't fully understand</div><p>${escapeHtml(e.confused)}</p></div>`:''}
+              </div>
+            </details>
+          </article>`;
+        elCards.insertAdjacentHTML('beforeend', card);
+      }
+    }
+
+    function escapeHtml(str){
+      return String(str).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+    }
+
+    elSearch.addEventListener('input', () => render());
+    elSort.addEventListener('change', () => render());
+
+    fetchSheet().catch(err => {
+      console.error(err);
+      elCards.innerHTML = `
+        <div class="col-span-full text-sm text-red-600">
+          Could not load Google Sheet. Make sure you set <em>SHEET_ID</em>, <em>SHEET_NAME</em>, and share the sheet as "Anyone with the link (Viewer)".
+        </div>`;
+    });
+  </script>
+</body>
+</html>
